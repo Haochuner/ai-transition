@@ -1,8 +1,7 @@
 #!/usr/bin/env python
 """Day 2 · 最小可用的 DeepSeek CLI。
 
-用法：
-    $env:DEEPSEEK_API_KEY = "sk-..."
+用法（key 放在仓库根目录的 .env 里，不写在命令行）：
     python scripts/chat.py "用一句话解释什么是容器"
     python scripts/chat.py              # 不带参数 -> 进入连续对话
     python scripts/chat.py -s "你是个严格的审稿人" "帮我挑错"
@@ -16,19 +15,44 @@ import os
 import sys
 import urllib.error
 import urllib.request
+from pathlib import Path
 
 API_URL = "https://api.deepseek.com/chat/completions"
 DEFAULT_MODEL = "deepseek-chat"
 TIMEOUT = 60
+PLACEHOLDER = "sk-xxxxxxxxxxxxxxxxxxxxxxxx"
+
+
+def load_dotenv() -> None:
+    """读 .env 里的 KEY=VALUE，写进环境变量。
+
+    先看当前目录，再看仓库根目录（scripts/ 的上一级）。
+    已经存在的环境变量优先，不会被文件覆盖。
+    """
+    candidates = [Path.cwd() / ".env", Path(__file__).resolve().parent.parent / ".env"]
+    for path in candidates:
+        if not path.is_file():
+            continue
+        for raw in path.read_text(encoding="utf-8").splitlines():
+            line = raw.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            key = key.strip().removeprefix("export ").strip()
+            value = value.strip().strip('"').strip("'")
+            if key and value and value != PLACEHOLDER:
+                os.environ.setdefault(key, value)
 
 
 def get_key() -> str:
     key = os.environ.get("DEEPSEEK_API_KEY", "").strip()
-    if not key:
+    if not key or key == PLACEHOLDER:
         sys.exit(
-            "缺少环境变量 DEEPSEEK_API_KEY。\n"
-            '在 PowerShell 里先执行：$env:DEEPSEEK_API_KEY = "sk-你的key"\n'
-            "（key 在 platform.deepseek.com → API keys 创建，只显示一次）"
+            "没有找到可用的 DEEPSEEK_API_KEY。\n"
+            f"请打开 {Path(__file__).resolve().parent.parent / '.env'}，\n"
+            "把这一行改成你自己的 key（等号后面直接粘贴，不要加引号）：\n"
+            "    DEEPSEEK_API_KEY=sk-你的key\n"
+            "key 在 platform.deepseek.com → API keys 创建，只显示一次。"
         )
     if not key.startswith("sk-"):
         sys.exit(f"DEEPSEEK_API_KEY 格式不对（应以 sk- 开头），当前值长度 {len(key)}")
@@ -72,6 +96,8 @@ def main() -> None:
             stream.reconfigure(encoding="utf-8")
         except Exception:
             pass
+
+    load_dotenv()
 
     parser = argparse.ArgumentParser(description="DeepSeek 命令行对话")
     parser.add_argument("prompt", nargs="*", help="要问的问题；不填则进入连续对话")

@@ -53,13 +53,21 @@ git push
 
 ## 第一个 CLI
 
-```powershell
-$env:DEEPSEEK_API_KEY = "sk-..."        # 只在这个窗口有效
-python scripts/chat.py "用一句话解释什么是容器"
-python scripts/chat.py                   # 连续对话
+key 放在仓库根目录的 `.env` 里（已被 `.gitignore` 排除，不会进仓库）：
+
+```
+DEEPSEEK_API_KEY=sk-你的key
 ```
 
-只用标准库，不用 `pip install`。key 不写进代码，只从环境变量读。
+然后直接跑，不用在命令行里设环境变量：
+
+```powershell
+python scripts/chat.py "用一句话解释什么是容器"
+python scripts/chat.py                   # 连续对话
+python scripts/chat.py -s "你是个严格的审稿人" "帮我挑错"
+```
+
+只用标准库，不用 `pip install`。key 只从 `.env` 或环境变量读，永远不写进代码。
 
 ---
 

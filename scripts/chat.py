@@ -13,15 +13,25 @@ import argparse
 import json
 import os
 import sys
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
 
+
 API_URL = "https://api.deepseek.com/chat/completions"
 DEFAULT_MODEL = "deepseek-chat"
 TIMEOUT = 60
-PLACEHOLDER = "sk-xxxxxxxxxxxxxxxxxxxxxxxx"
 
+# --- 三个「生产化」参数，先有直觉，后面再理解 ---
+MAX_TURNS = 10      # 只把最近 10 轮对话发回模型，防止 token 无限增长
+MAX_TOKENS = 1024   # 单次回复上限，控制成本
+RETRIES = 3         # 一共尝试 3 次（首次 + 2 次重试）
+RETRY_STATUS = {429, 500, 502, 503, 504}  # 限流和临时故障，值得重试
+
+def is_placeholder(value: str) -> bool:
+    """sk- 后面全是 x，就是 .env.example 里的占位符。"""
+    return value.startswith("sk-") and set(value[3:]) == {"x"}
 
 def load_dotenv() -> None:
     """读 .env 里的 KEY=VALUE，写进环境变量。
@@ -40,13 +50,13 @@ def load_dotenv() -> None:
             key, value = line.split("=", 1)
             key = key.strip().removeprefix("export ").strip()
             value = value.strip().strip('"').strip("'")
-            if key and value and value != PLACEHOLDER:
+            if key and value and not is_placeholder(value):
                 os.environ.setdefault(key, value)
 
 
 def get_key() -> str:
     key = os.environ.get("DEEPSEEK_API_KEY", "").strip()
-    if not key or key == PLACEHOLDER:
+    if not key or is_placeholder(key):
         sys.exit(
             "没有找到可用的 DEEPSEEK_API_KEY。\n"
             f"请打开 {Path(__file__).resolve().parent.parent / '.env'}，\n"
@@ -59,32 +69,69 @@ def get_key() -> str:
     return key
 
 
-def ask(messages: list[dict], model: str) -> tuple[str, dict]:
+def trim(messages: list[dict], max_turns: int = MAX_TURNS) -> list[dict]:
+    """只保留最近 max_turns 轮对话，system 提示词永远保留。
+
+    一轮 = 一条 user + 一条 assistant，所以 10 轮是 20 条消息。
+    多轮聊天的 token 是 O(n) 增长的，不裁剪迟早会撞上下文上限。
+    """
+    system = [m for m in messages if m["role"] == "system"]
+    rest = [m for m in messages if m["role"] != "system"]
+    kept = rest[-max_turns * 2 :]
+    # 截断后如果开头是 assistant，丢掉它，否则对话从半截开始
+    while kept and kept[0]["role"] == "assistant":
+        kept.pop(0)
+    return system + kept
+
+
+def ask(messages: list[dict], model: str, max_tokens: int = MAX_TOKENS) -> tuple[str, dict]:
     payload = json.dumps(
-        {"model": model, "messages": messages, "stream": False},
+        {
+            "model": model,
+            "messages": messages,
+            "stream": False,
+            "max_tokens": max_tokens,
+        },
         ensure_ascii=False,
     ).encode("utf-8")
 
-    req = urllib.request.Request(
-        API_URL,
-        data=payload,
-        method="POST",
-        headers={
-            "Authorization": f"Bearer {get_key()}",
-            "Content-Type": "application/json",
-        },
-    )
+    for attempt in range(RETRIES):
+        req = urllib.request.Request(
+            API_URL,
+            data=payload,
+            method="POST",
+            headers={
+                "Authorization": f"Bearer {get_key()}",
+                "Content-Type": "application/json",
+            },
+        )
 
-    try:
-        with urllib.request.urlopen(req, timeout=TIMEOUT) as resp:
-            data = json.load(resp)
-    except urllib.error.HTTPError as e:
-        detail = e.read().decode("utf-8", "replace")[:600]
-        sys.exit(f"[HTTP {e.code}] {detail}")
-    except urllib.error.URLError as e:
-        sys.exit(f"[网络错误] {e.reason}（检查代理/网络，或稍后重试）")
-    except TimeoutError:
-        sys.exit(f"[超时] {TIMEOUT}s 内没有响应")
+        try:
+            with urllib.request.urlopen(req, timeout=TIMEOUT) as resp:
+                data = json.load(resp)
+            break
+        except urllib.error.HTTPError as e:
+            detail = e.read().decode("utf-8", "replace")[:600]
+            # 429 限流、5xx 临时故障：退避重试（1s、2s）
+            if e.code in RETRY_STATUS and attempt < RETRIES - 1:
+                wait = 2**attempt
+                print(f"[重试] HTTP {e.code}，{wait}s 后重试（{attempt + 1}/{RETRIES - 1}）", file=sys.stderr)
+                time.sleep(wait)
+                continue
+            sys.exit(f"[HTTP {e.code}] {detail}")
+        except (urllib.error.URLError, TimeoutError) as e:
+            # 网络抖动、DNS 抖动、超时：同样值得重试
+            reason = getattr(e, "reason", e)
+            if attempt < RETRIES - 1:
+                wait = 2**attempt
+                print(f"[重试] 网络错误（{reason}），{wait}s 后重试（{attempt + 1}/{RETRIES - 1}）", file=sys.stderr)
+                time.sleep(wait)
+                continue
+            sys.exit(f"[网络错误] {reason}（检查代理/网络，或稍后重试）")
+        else:
+            break
+    else:  # pragma: no cover - 上面每条路径都会 break 或 sys.exit
+        sys.exit("[失败] 重试次数用尽")
 
     return data["choices"][0]["message"]["content"], data.get("usage", {})
 
@@ -103,6 +150,12 @@ def main() -> None:
     parser.add_argument("prompt", nargs="*", help="要问的问题；不填则进入连续对话")
     parser.add_argument("-s", "--system", default=None, help="系统提示词")
     parser.add_argument("-m", "--model", default=DEFAULT_MODEL, help=f"模型，默认 {DEFAULT_MODEL}")
+    parser.add_argument(
+        "--max-tokens",
+        type=int,
+        default=MAX_TOKENS,
+        help=f"单次回复的 token 上限，默认 {MAX_TOKENS}",
+    )
     args = parser.parse_args()
 
     messages: list[dict] = []
@@ -112,7 +165,7 @@ def main() -> None:
     # 单次提问
     if args.prompt:
         messages.append({"role": "user", "content": " ".join(args.prompt)})
-        answer, usage = ask(messages, args.model)
+        answer, usage = ask(trim(messages), args.model, args.max_tokens)
         print(answer)
         if usage:
             print(
@@ -124,6 +177,7 @@ def main() -> None:
 
     # 连续对话：输入 exit 退出
     print("连续对话模式，输入 exit 退出。\n")
+    total_in = total_out = 0
     while True:
         try:
             line = input("你> ").strip()
@@ -135,9 +189,15 @@ def main() -> None:
         if not line:
             continue
         messages.append({"role": "user", "content": line})
-        answer, _ = ask(messages, args.model)
+        # 每轮只把最近的对话发回去，历史在本地完整保留（下一轮还能用）
+        answer, usage = ask(trim(messages), args.model, args.max_tokens)
+        total_in += usage.get("prompt_tokens", 0) or 0
+        total_out += usage.get("completion_tokens", 0) or 0
         print(f"\n模型> {answer}\n")
         messages.append({"role": "assistant", "content": answer})
+
+    if total_in or total_out:
+        print(f"[本次会话 token] 输入 {total_in} / 输出 {total_out}", file=sys.stderr)
 
 
 if __name__ == "__main__":

@@ -21,7 +21,7 @@
 - [x] 建仓库，写第一份 README
 - [x] 装 Docker，跑通 hello-world（数据目录已放 E 盘）
 - [x] 第一次 push 到 GitHub（Haochuner/ai-transition）
-- [ ] Day 2：写出并跑通第一个 CLI（`scripts/chat.py`）
+- [x] Day 2：写出并跑通第一个 CLI（`scripts/chat.py`）
 
 ## 环境
 

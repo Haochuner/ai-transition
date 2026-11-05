@@ -19,8 +19,9 @@
 - [x] 装 Git（2.39.2）
 - [x] 注册 DeepSeek，充值 100
 - [x] 建仓库，写第一份 README
-- [ ] 装 Docker，跑通 hello-world
-- [ ] 第一次 push 到 GitHub
+- [x] 装 Docker，跑通 hello-world（数据目录已放 E 盘）
+- [x] 第一次 push 到 GitHub（Haochuner/ai-transition）
+- [ ] Day 2：写出并跑通第一个 CLI（`scripts/chat.py`）
 
 ## 环境
 
@@ -47,9 +48,18 @@ git push
 
 ## 下一步
 
-1. Docker 装好，跑通第一个容器
-2. 用 DeepSeek API 写第一个能跑的脚本，放进 `scripts/`
-3. 每天一条 `notes/` 日志，坚持 30 天
+1. 跑通 `scripts/chat.py`（见下），确认 DeepSeek API 全链路可用
+2. 每天一条 `notes/` 日志，坚持 30 天
+
+## 第一个 CLI
+
+```powershell
+$env:DEEPSEEK_API_KEY = "sk-..."        # 只在这个窗口有效
+python scripts/chat.py "用一句话解释什么是容器"
+python scripts/chat.py                   # 连续对话
+```
+
+只用标准库，不用 `pip install`。key 不写进代码，只从环境变量读。
 
 ---
 
